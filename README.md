@@ -47,4 +47,6 @@ ALTER TABLE `yyy` ADD COLUMN `cc` tinyint(1) NULL DEFAULT '0',
  ADD COLUMN `dd` tinyint(3) unsigned NULL DEFAULT '0',
  ADD COLUMN `aa_id` varchar(64) NOT NULL DEFAULT '';
 
+ALTER TABLE `zzz` ADD INDEX `idx_iii` (deleted_at);
+
 ```
