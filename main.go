@@ -2,19 +2,21 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
+	"regexp"
+	"strings"
 
 	"database/sql"
 
 	"github.com/BurntSushi/toml"
 	_ "github.com/go-sql-driver/mysql"
+	"gitlab.matrixport.com/common/gconv"
+	"gitlab.matrixport.com/common/generic_tool/slice"
+	"gitlab.matrixport.com/common/log"
 )
 
 type tomlConfig struct {
-	SchemaName1 string
-	SchemaName2 string
-	Servers     map[string]database
+	Servers map[string]database
 }
 
 type database struct {
@@ -25,23 +27,33 @@ type database struct {
 	Name     string
 }
 
+type column struct {
+	Name       string
+	Type       string
+	IsNullable string
+	Default    interface{}
+	After      string
+	Comment    string
+}
+
 var (
 	driverName string
+	diffSql    string
 	dbConfig   tomlConfig
-	dLog       *log.Logger
 )
 
 func init() {
 	driverName = "mysql"
 }
 
-// Conn 连接数据库
-func Conn(dataSourceName string) *sql.DB {
+// mysql -h127.0.0.1 -P3316 -uroot -p123456
+// Connect 连接数据库
+func Connect(dataSourceName string) *sql.DB {
 	//连接数据库
+	Info("dataSourceName==>" + dataSourceName)
 	db, err := sql.Open(driverName, dataSourceName)
 	if err != nil {
-		dLog.Println(err.Error())
-		os.Exit(-1)
+		panic(err)
 	}
 	if err := db.Ping(); err != nil {
 		panic("ERROR:" + err.Error())
@@ -50,7 +62,7 @@ func Conn(dataSourceName string) *sql.DB {
 }
 
 func getSource(db string) (source string) {
-	// dataSourceName = "qdxg:123456@tcp(localhost:3306)/qdxg?charset=utf8"
+	// dataSourceName = "用户名:密码@tcp(localhost:3306)/数据库名称?charset=utf8"
 	source = dbConfig.Servers[db].User +
 		":" +
 		dbConfig.Servers[db].Password +
@@ -64,282 +76,270 @@ func getSource(db string) (source string) {
 	return
 }
 
-func main() {
-
-	// 定义一个日志
-	logFile, err := os.Create("diff.log")
-	defer logFile.Close()
+// TableDiff 对比表的不同
+func TableDiff(db1, db2 *sql.DB, schemaFrom, schemaTo string) []string {
+	tableName1, err := getTableName(db1, schemaFrom)
 	if err != nil {
-		log.Fatalln("open file error !")
+		panic(err)
 	}
-	// 创建一个日志对象
-	dLog = log.New(logFile, "[Info]", log.LstdFlags|log.Lshortfile)
-	//配置一个日志格式的前缀
-	dLog.SetPrefix("[Info]")
-	//配置log的Flag参数
-	dLog.SetFlags(dLog.Flags() | log.LstdFlags)
-	dLog.Println("开始执行……")
-	// 读取配置文件
-	if _, err := toml.DecodeFile("config.toml", &dbConfig); err != nil {
-		fmt.Println("解析错误:", err.Error())
-		return
+	Info(dbConfig.Servers["1"].Host, "/", schemaFrom, " 表名： ", tableName1)
+
+	tableName2, err := getTableName(db2, schemaTo)
+	if err != nil {
+		panic(err)
 	}
+	Info(dbConfig.Servers["2"].Host, "/", schemaTo, " 表名： ", tableName2)
 
-	// 获得一个sql连接
-	dLog.Printf("连接%s/%s数据库……", dbConfig.Servers["1"].Host, dbConfig.Servers["1"].Name)
-	schema1 := dbConfig.SchemaName1
-	db1 := Conn(getSource("1"))
-	defer db1.Close()
-
-	// 获得第二个sql连接
-	dLog.Printf("连接%s/%s数据库……", dbConfig.Servers["2"].Host, dbConfig.Servers["2"].Name)
-	schema2 := dbConfig.SchemaName2
-	db2 := Conn(getSource("2"))
-	defer db2.Close()
-
-	// 对比触发器
-	dLog.Println("对比触发器……")
-	TriggerDiff(db1, db2, schema1, schema2)
-	// 对比函数
-	dLog.Println("对比函数……")
-	FunctionDiff(db1, db2, schema1, schema2)
-	// 对比表
-	dLog.Println("对比表……")
-	ts, b := TableDiff(db1, db2, schema1, schema2)
-	if b {
-		// 对比列名
-		dLog.Println("对比列名……")
-		ColumnDiff(db1, db2, schema1, schema2, ts)
-		// 对比索引
-		dLog.Println("对比索引……")
-		IndexDiff(db1, db2, schema1, schema2, ts)
+	if !isEqual(tableName1, tableName2) {
+		tableDiff := diffName(tableName1, tableName2)
+		for _, table := range tableDiff {
+			createSQL, _ := showCreateTable(db2, table)
+			diffSql += createSQL + "\n\n"
+		}
 	}
-
-	dLog.Println("执行结束……")
+	return tableName1
 }
 
-// TableDiff 对比表的不同
-func TableDiff(db1, db2 *sql.DB, schema1, schema2 string) (t []string, b bool) {
-	tableName1, err := getTableName(db1, schema1)
+func showCreateTable(s *sql.DB, table string) (string, error) {
+	// 使用 fmt.Sprintf 将表名嵌入到 SQL 查询中
+	query := fmt.Sprintf("SHOW CREATE TABLE `%s`", table)
+
+	// 执行查询
+	q, err := s.Query(query)
 	if err != nil {
-		dLog.Fatalln(err.Error())
+		return "", err
+	}
+	defer q.Close()
+
+	// 读取结果
+	var tableName, createSQL string
+	if q.Next() {
+		if err := q.Scan(&tableName, &createSQL); err != nil {
+			return "", err
+		}
 	}
 
-	dLog.Println(dbConfig.Servers["1"].Host, "/", schema1, " 表名： ", tableName1)
-	tableName2, err := getTableName(db2, schema2)
-	if err != nil {
-		dLog.Fatalln(err.Error())
+	// 检查是否有扫描错误
+	if err := q.Err(); err != nil {
+		return "", err
 	}
 
-	dLog.Println(dbConfig.Servers["2"].Host, "/", schema2, " 表名： ", tableName2)
-	if !isEqual(tableName1, tableName2) {
-		t = diffName(tableName1, tableName2)
-		dLog.Printf("两个数据库不同的表,共有%d个，分别是：%s", len(t), t)
-		return t, false
-	}
-	t = tableName1
-	dLog.Printf("两个数据库表相同")
-	return t, true
+	return createSQL + "comment 'no qa'; ", nil
 }
 
 func getTableName(s *sql.DB, table string) (ts []string, err error) {
-	stm, perr := s.Prepare("select table_name from information_schema.tables where table_schema=? order by table_name")
-	if perr != nil {
-		err = perr
-		return
+	stm, err := s.Prepare("select table_name from information_schema.tables where table_schema=? order by table_name")
+	if err != nil {
+		return nil, err
 	}
 	defer stm.Close()
-	q, qerr := stm.Query(table)
-	if qerr != nil {
-		err = qerr
-		return
+	q, err := stm.Query(table)
+	if err != nil {
+		return nil, err
 	}
 	defer q.Close()
 
 	for q.Next() {
 		var name string
 		if err := q.Scan(&name); err != nil {
-			log.Fatal(err)
+			panic(err)
 		}
 		ts = append(ts, name)
 	}
 	return
 }
 
-// TriggerDiff 对比触发器的不同
-func TriggerDiff(db1, db2 *sql.DB, schema1, schema2 string) bool {
-	triggerName1, err := getTriggerName(db1, schema1)
-	if err != nil {
-		dLog.Fatalln(err.Error())
-	}
-	triggerName2, err := getTriggerName(db2, schema2)
-	if err != nil {
-		dLog.Fatalln(err.Error())
-	}
-	if !isEqual(triggerName1, triggerName2) {
-		dt := diffName(triggerName1, triggerName2)
-		dLog.Printf("两个数据库不同的触发器,共有%d个，分别是：%s", len(dt), dt)
-		return false
-	}
-	dLog.Printf("两个数据库触发器相同")
-	return true
-}
-
-func getTriggerName(s *sql.DB, schema string) (ts []string, err error) {
-	stm, perr := s.Prepare("select TRIGGER_NAME from information_schema.triggers where TRIGGER_SCHEMA=? order by TRIGGER_NAME")
-	if perr != nil {
-		err = perr
-		return
-	}
-	defer stm.Close()
-	q, qerr := stm.Query(schema)
-	if qerr != nil {
-		err = qerr
-		return
-	}
-	defer q.Close()
-
-	for q.Next() {
-		var name string
-		if err := q.Scan(&name); err != nil {
-			log.Fatal(err)
+func genTableAlterSql(t string, cols []column) string {
+	var after string
+	arr := []string{}
+	for _, col := range cols {
+		var isNull string
+		if col.IsNullable == "YES" {
+			isNull = " NULL"
+		} else {
+			isNull = " NOT NULL"
 		}
-		ts = append(ts, name)
-	}
-	return
-}
 
-// FunctionDiff 对比函数的不同
-func FunctionDiff(db1, db2 *sql.DB, schema1, schema2 string) bool {
-	functionName1, err := getFunctionName(db1, schema1)
-	if err != nil {
-		dLog.Fatalln(err.Error())
-	}
-	functionName2, err := getFunctionName(db2, schema2)
-	if err != nil {
-		dLog.Fatalln(err.Error())
-	}
-	dLog.Println(functionName1)
-	dLog.Println(functionName2)
-	if !isEqual(functionName1, functionName2) {
-		dt := diffName(functionName1, functionName2)
-		dLog.Printf("两个数据库不同的函数,共有%d个，分别是：%s", len(dt), dt)
-		return false
-	}
-	dLog.Printf("两个数据库函数相同")
-	return true
-}
-
-func getFunctionName(s *sql.DB, schema string) (ts []string, err error) {
-	stm, perr := s.Prepare("select ROUTINE_NAME from information_schema.routines where ROUTINE_SCHEMA=? and ROUTINE_TYPE='FUNCTION' order by ROUTINE_NAME")
-	if perr != nil {
-		err = perr
-		return
-	}
-	defer stm.Close()
-	q, qerr := stm.Query(schema)
-	if qerr != nil {
-		err = qerr
-		return
-	}
-	defer q.Close()
-
-	for q.Next() {
-		var name string
-		if err := q.Scan(&name); err != nil {
-			log.Fatal(err)
+		var defaultValue string
+		if col.Default == nil {
+			defaultValue = " DEFAULT NULL"
+		} else if col.Default != "" {
+			defaultValue = fmt.Sprintf(" DEFAULT '%s'", col.Default)
 		}
-		ts = append(ts, name)
+
+		s := fmt.Sprintf("ADD COLUMN `%s` %s%s%s%s", col.Name, col.Type, isNull, defaultValue, after)
+		arr = append(arr, s)
 	}
-	return
+	return fmt.Sprintf("ALTER TABLE `%s` %s;", t, strings.Join(arr, ",\n "))
+}
+
+type index struct {
+	Name      string
+	NoneUniq  bool
+	IsPrimary bool
+	Columns   string // join by ,
+}
+
+func genIndexAlterSql(t string, indexes []index) string {
+	arr := []string{}
+	for _, ind := range indexes {
+		var s string
+
+		if ind.IsPrimary {
+			s = fmt.Sprintf("ADD PRIMARY KEY (%s)", ind.Columns)
+		} else {
+			if ind.NoneUniq {
+				s = fmt.Sprintf("ADD INDEX `%s` (%s)", ind.Name, ind.Columns)
+			} else {
+				s = fmt.Sprintf("ADD UNIQUE INDEX `%s` (%s)", ind.Name, ind.Columns)
+			}
+		}
+
+		arr = append(arr, s)
+	}
+	return fmt.Sprintf("ALTER TABLE `%s` %s;", t, strings.Join(arr, ",\n "))
 }
 
 // ColumnDiff 对比函数的不同
-func ColumnDiff(db1, db2 *sql.DB, schema1, schema2 string, table []string) {
-	for _, t := range table {
-		columnName1, err := getColumnName(db1, schema1, t)
+func ColumnDiff(db1, db2 *sql.DB, schemaFrom, schemaTo string, tables []string) {
+	for _, table := range tables {
+		columnName1, err := getColumnName(db1, schemaFrom, table)
 		if err != nil {
-			dLog.Fatalln(err.Error())
+			panic(err)
 		}
-		columnName2, err := getColumnName(db2, schema2, t)
+		columnName2, err := getColumnName(db2, schemaTo, table)
 		if err != nil {
-			dLog.Fatalln(err.Error())
+			panic(err)
 		}
-		if !isEqual(columnName1, columnName2) {
-			dt := diffName(columnName1, columnName2)
-			dLog.Printf("两个数据库%s表，有不同的列,共有%d个，分别是：%s", t, len(dt), dt)
-		} else {
-			dLog.Printf("两个数据库%s表，列相同", t)
+		col2Diff := columnDiff(table, columnName1, columnName2)
+		if len(col2Diff) > 0 {
+
+			diffSql += genTableAlterSql(table, col2Diff) + "\n\n"
 		}
 	}
 }
 
-func getColumnName(s *sql.DB, schema, table string) (ts []string, err error) {
-	stm, perr := s.Prepare("select COLUMN_NAME from information_schema.columns where TABLE_SCHEMA=? and TABLE_NAME=? order by COLUMN_NAME")
-	if perr != nil {
-		err = perr
-		return
+func getColumnName(s *sql.DB, schema, table string) (ts []column, err error) {
+	stm, err := s.Prepare("select COLUMN_NAME,COLUMN_TYPE,COLUMN_DEFAULT,IS_NULLABLE,COLUMN_COMMENT from information_schema.columns where TABLE_SCHEMA=? and TABLE_NAME=? order by ordinal_position asc")
+	if err != nil {
+		return nil, err
 	}
 	defer stm.Close()
-	q, qerr := stm.Query(schema, table)
-	if qerr != nil {
-		err = qerr
-		return
+	q, err := stm.Query(schema, table)
+	if err != nil {
+		return nil, err
 	}
 	defer q.Close()
 
+	ts = make([]column, 0)
+
+	// var after string
 	for q.Next() {
-		var name string
-		if err := q.Scan(&name); err != nil {
-			log.Fatal(err)
+		var columnName string
+		var column_type string
+		var columnDefault interface{}
+		var isNullable string
+		var comment string
+
+		if err := q.Scan(&columnName, &column_type, &columnDefault, &isNullable, &comment); err != nil {
+			panic(err)
 		}
-		ts = append(ts, name)
+
+		col := column{}
+		col.Name = columnName
+		col.Type = column_type
+		col.IsNullable = isNullable
+		col.Default = columnDefault
+		col.Comment = comment
+
+		ts = append(ts, col)
 	}
 	return
 }
 
 // IndexDiff 对比函数的不同
-func IndexDiff(db1, db2 *sql.DB, schema1, schema2 string, table []string) {
-	for _, t := range table {
-		indexName1, err := getIndexName(db1, schema1, t)
+func IndexDiff(db1, db2 *sql.DB, schema1, schema2 string, tables []string) {
+	for _, table := range tables {
+		indexName1, err := getIndex(db1, schema1, table)
 		if err != nil {
-			dLog.Fatalln(err.Error())
+			panic(err)
 		}
-		indexName2, err := getIndexName(db2, schema2, t)
+		indexName2, err := getIndex(db2, schema2, table)
 		if err != nil {
-			dLog.Fatalln(err.Error())
+			panic(err)
 		}
-		if !isEqual(indexName1, indexName2) {
-			dt := diffName(indexName1, indexName2)
-			dLog.Printf("两个数据库%s表，有不同的索引,共有%d个，分别是：%s", t, len(dt), dt)
-		} else {
-			dLog.Printf("两个数据库%s表，索引相同", t)
+		indexDiff := indexDiff(table, indexName1, indexName2)
+		if len(indexDiff) > 0 {
+
+			diffSql += genIndexAlterSql(table, indexDiff) + "\n\n"
 		}
 	}
 }
 
-func getIndexName(s *sql.DB, schema, table string) (ts []string, err error) {
-	stm, perr := s.Prepare("select INDEX_NAME from information_schema.STATISTICS where TABLE_SCHEMA=? and TABLE_NAME=? order by INDEX_NAME")
-	if perr != nil {
-		err = perr
-		return
+func getIndex(s *sql.DB, schema, table string) (ts []index, err error) {
+	stm, err := s.Prepare("select `INDEX_NAME`,`NON_UNIQUE`, GROUP_CONCAT(`COLUMN_NAME` ORDER BY `SEQ_IN_INDEX`) as `COLUMNS` from information_schema.STATISTICS where TABLE_SCHEMA=? and TABLE_NAME=?  group by `INDEX_NAME`")
+	if err != nil {
+		return nil, err
 	}
 	defer stm.Close()
-	q, qerr := stm.Query(schema, table)
-	if qerr != nil {
-		err = qerr
-		return
+	q, err := stm.Query(schema, table)
+	if err != nil {
+		return nil, err
 	}
 	defer q.Close()
 
 	for q.Next() {
 		var name string
-		if err := q.Scan(&name); err != nil {
-			log.Fatal(err)
+		var nonUnique bool
+		var columns string
+		if err := q.Scan(&name, &nonUnique, &columns); err != nil {
+			panic(err)
 		}
-		ts = append(ts, name)
+		ts = append(ts, index{
+			Name:     name,
+			NoneUniq: nonUnique,
+			Columns:  columns,
+		})
 	}
 	return
+}
+
+// y > x
+func columnDiff(table string, x, y []column) (res []column) {
+	xNames := slice.SliceToMap(x, func(v column) (string, column) {
+		return v.Name, v
+	})
+	yNames := slice.SliceToMap(y, func(v column) (string, column) {
+		return v.Name, v
+	})
+	Info("table: " + table)
+	Info("xNames: " + gconv.Export(xNames))
+	Info("yNames: " + gconv.Export(yNames))
+	for key := range yNames {
+		if _, ok := xNames[key]; !ok {
+			res = append(res, yNames[key])
+		}
+	}
+	return res
+}
+
+// y > x
+func indexDiff(table string, x, y []index) (res []index) {
+	xNames := slice.SliceToMap(x, func(v index) (string, index) {
+		return v.Columns, v
+	})
+	yNames := slice.SliceToMap(y, func(v index) (string, index) {
+		return v.Columns, v
+	})
+	Info("table: " + table)
+	Info("xNames: " + gconv.Export(xNames))
+	Info("yNames: " + gconv.Export(yNames))
+	for key := range yNames {
+		if _, ok := xNames[key]; !ok {
+			res = append(res, yNames[key])
+		}
+	}
+	return res
 }
 
 func isEqual(x, y []string) bool {
@@ -354,45 +354,69 @@ func isEqual(x, y []string) bool {
 	return true
 }
 
-func checkTableName(a, b []string) []string {
-	c := a[:0]
-	m := make(map[string]int)
-	for _, s := range a {
-		m[s] = 1
+// assume: to >= from
+func diffName(from, to []string) []string {
+	diff := []string{}
+	mFrom := make(map[string]int)
+	for _, s := range from {
+		mFrom[s] = 1
 	}
 
-	for _, s := range b {
-		if _, ok := m[s]; !ok {
-			c = append(c, s)
+	for _, s := range to {
+		if _, ok := mFrom[s]; !ok {
+			diff = append(diff, s)
+
 		}
 	}
-	return c
+
+	return diff
 }
-func diffName(a, b []string) []string {
-	c := a[:0]
-	m := make(map[string]int)
-	for _, s := range a {
-		m[s] = 1
+
+func cleanSQL(sql string) string {
+	// 定义正则表达式模式
+	patterns := []string{
+		`ENGINE=InnoDB`,
+		`AUTO_INCREMENT=\d+`,
+		`DEFAULT CHARSET=utf8mb4`,
+		`COLLATE=utf8mb4_unicode_ci`,
+		`COLLATE utf8mb4_unicode_ci`,
 	}
 
-	// 交集
-	n := make(map[string]int)
-	for _, s := range b {
-		if _, ok := m[s]; ok {
-			n[s] = 1
-		}
+	// 遍历每个模式并替换匹配项
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		sql = re.ReplaceAllString(sql, "")
 	}
-	// 与a不同
-	for _, s := range a {
-		if _, ok := n[s]; !ok {
-			c = append(c, s)
-		}
+
+	return sql
+}
+func main() {
+	err := os.Remove("logs/MacBook-Pro-2.local.log")
+	if err != nil {
+		fmt.Println("err", err)
 	}
-	// 与b不同
-	for _, s := range b {
-		if _, ok := n[s]; !ok {
-			c = append(c, s)
-		}
+	log.InitLogger("main", true, "debug", "json", 1)
+
+	// 读取配置文件
+	if _, err := toml.DecodeFile("config.toml", &dbConfig); err != nil {
+		panic(err)
 	}
-	return c
+
+	Info("连接数据库: " + dbConfig.Servers["1"].Host + " " + dbConfig.Servers["1"].Name)
+	schemaFrom := dbConfig.Servers["1"].Name
+	db1 := Connect(getSource("1"))
+	defer db1.Close()
+
+	Info("连接数据库: " + dbConfig.Servers["2"].Host + " " + dbConfig.Servers["2"].Name)
+	schemaTo := dbConfig.Servers["2"].Name
+	db2 := Connect(getSource("2"))
+	defer db2.Close()
+
+	tables := TableDiff(db1, db2, schemaFrom, schemaTo)
+	// 对比列名
+	ColumnDiff(db1, db2, schemaFrom, schemaTo, tables)
+	// 对比索引
+	IndexDiff(db1, db2, schemaFrom, schemaTo, tables)
+
+	fmt.Println("--- diffSql\n", cleanSQL(diffSql))
 }
