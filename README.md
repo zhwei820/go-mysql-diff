@@ -1,36 +1,42 @@
 # go-mysql-diff
 
-Compare two mysql database tables, columns and indexing tools
+Tools for Comparing two mysql database tables, columns and indexes. Only support add table/column/index.
 
-### 配置文件利用[toml](https://github.com/toml-lang/toml)
-
-格式如下：
+### Edit Config file
 
 ```
+vi config.toml
+```
 
+```toml
+#
 [servers]
   [servers.1]
   host = "127.0.0.1"
-  port = "3306"
-  user = "ch"
+  port = "3316"
+  user = "root"
   password = "123456"
   name = "ch1"
 
   [servers.2]
   host = "127.0.0.1"
-  port = "3306"
-  user = "ch"
+  port = "3316"
+  user = "root"
   password = "123456"
   name = "ch2"
 ```
 
-- run
+### Run to make a diff
 
+```bash
 make run
+```
 
-- output
+### Check output
 
-cat diff.sql
+```bash
+> cat diff.sql
+```
 
 ```sql
 
