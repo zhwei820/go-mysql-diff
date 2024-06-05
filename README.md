@@ -9,21 +9,21 @@ vi config.toml
 ```
 
 ```toml
-#
-[servers]
-  [servers.1]
-  host = "127.0.0.1"
-  port = "3316"
-  user = "root"
-  password = "123456"
-  name = "ch1"
+# Only supports adding tables/fields/indexes
+[servers.1] # from
+host = "127.0.0.1"
+port = "3316"
+user = "root"
+password = "123456"
+name = "ch_main"
 
-  [servers.2]
-  host = "127.0.0.1"
-  port = "3316"
-  user = "root"
-  password = "123456"
-  name = "ch2"
+[servers.2] # to
+host = "127.0.0.1"
+port = "3316"
+user = "root"
+password = "123456"
+name = "ch_v2"
+
 ```
 
 ### Run to make a diff
