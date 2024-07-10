@@ -391,7 +391,7 @@ func cleanSQL(sql string) string {
 	return sql
 }
 func main() {
-	err := os.Remove("logs/MacBook-Pro-2.local.log")
+	err := os.Remove("logs/*.log")
 	if err != nil {
 		fmt.Println("err", err)
 	}
