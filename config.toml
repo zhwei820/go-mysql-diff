@@ -8,9 +8,11 @@ user = "root"
 password = "123456"
 name = "fund_main"
 
+# name = "inner_loan_main"
 [servers.2] # to
 host = "127.0.0.1"
 port = "3316"
 user = "root"
 password = "123456"
 name = "fund_v2"
+# name = "inner_loan"
