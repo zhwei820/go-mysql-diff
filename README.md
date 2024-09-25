@@ -15,14 +15,14 @@ host = "127.0.0.1"
 port = "3316"
 user = "root"
 password = "123456"
-name = "new_main"
+name = "db_main"
 
 [servers.2] # to
 host = "127.0.0.1"
 port = "3316"
 user = "root"
 password = "123456"
-name = "new_new"
+name = "db_new"
 
 ```
 
