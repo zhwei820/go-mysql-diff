@@ -10,9 +10,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	_ "github.com/go-sql-driver/mysql"
-	"gitlab.matrixport.com/common/gconv"
-	"gitlab.matrixport.com/common/generic_tool/slice"
-	"gitlab.matrixport.com/common/log"
+	"github.com/zhwei820/gconv"
+	"github.com/zhwei820/generic_tool/slice"
+	"github.com/zhwei820/log"
 )
 
 type tomlConfig struct {
@@ -395,7 +395,7 @@ func main() {
 	if err != nil {
 		fmt.Println("err", err)
 	}
-	log.InitLogger("main", true, "debug", "json", 1)
+	log.InitLogger("main", true, "debug", 1)
 
 	// 读取配置文件
 	if _, err := toml.DecodeFile("config.toml", &dbConfig); err != nil {

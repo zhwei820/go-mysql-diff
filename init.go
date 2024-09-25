@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"gitlab.matrixport.com/common/log"
+	"github.com/zhwei820/log"
 )
 
 // TriggerDiff 对比触发器的不同
@@ -95,6 +95,6 @@ import (
 // 	return
 // }
 
-func Info(msg string,arg ...interface{}) {
+func Info(msg string, arg ...interface{}) {
 	log.InfoZ(context.Background(), fmt.Sprintf(msg, arg...))
 }
