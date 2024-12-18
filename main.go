@@ -395,7 +395,7 @@ func main() {
 	if err != nil {
 		fmt.Println("err", err)
 	}
-	log.InitLogger("main", true, "debug", 1)
+	log.InitLogger("main", true, "DEBUG", 1)
 
 	// 读取配置文件
 	if _, err := toml.DecodeFile("config.toml", &dbConfig); err != nil {
