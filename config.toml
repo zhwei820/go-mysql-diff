@@ -1,21 +1,19 @@
 [servers]
 
 # 只支持增加表/字段/索引
-# mysql -h10.171.6.22 -P3307 -uroot -pEYLFAWnChHulkDCRTet44bJMM  
-
-[servers.1] # from
-host = "10.171.6.22"
-port = "3307"
-user = "root"
-password = "EYLFAWnChHulkDCRTet44bJMM"
-name = "fixedincome"
-
-# name = "inner_loan_main"
-# mysql -h10.171.6.22 -P3306 -uqat_dml_user -pWm3Vv4ORlzpOOPOQ  
-[servers.2] # to
+# mysql -h10.171.6.22 -P3307 -uroot -pEYLFAWnChHulkDCRTet44bJMM
+[servers.1] # from less 
 host = "10.171.6.22"
 port = "3306"
 user = "qat_dml_user"
 password = "Wm3Vv4ORlzpOOPOQ"
+name = "fixedincome"
+
+# mysql -h10.171.6.22 -P3306 -uqat_dml_user -pWm3Vv4ORlzpOOPOQ
+[servers.2] # to more
+host = "10.171.6.22"
+port = "3307"
+user = "root"
+password = "EYLFAWnChHulkDCRTet44bJMM"
 name = "fixedincome"
 # name = "inner_loan"
